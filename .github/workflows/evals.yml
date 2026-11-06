@@ -1,0 +1,53 @@
+# E5/E6 [DE]: evals in CI.
+#   Every PR: offline tests (free), then the regression suite live, gated on pass^3,
+#   and the injection screen's own eval (E12).
+#   Nightly: the capability suite with more trials. Reported, never blocking.
+name: evals
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run pytest -q
+
+  regression:
+    needs: offline
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - if: env.ANTHROPIC_API_KEY != ''
+        run: uv run python -m evals.run --suite regression --trials 3 --gate 0.9
+      - if: (success() || failure()) && env.ANTHROPIC_API_KEY != ''
+        run: uv run python -m evals.screen --trials 3
+      - if: always() && env.ANTHROPIC_API_KEY != ''
+        uses: actions/upload-artifact@v4
+        with: {name: regression-results, path: results/}
+
+  capability:
+    needs: offline
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - if: env.ANTHROPIC_API_KEY != ''
+        run: uv run python -m evals.run --suite capability --trials 5
+      - if: always() && env.ANTHROPIC_API_KEY != ''
+        uses: actions/upload-artifact@v4
+        with: {name: capability-results, path: results/}
