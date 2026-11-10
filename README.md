@@ -1,4 +1,4 @@
-# Lumen Bank complaints agent
+# Eval driven agent
 
 A Claude agent that handles written complaints for a fictional UK bank, with the evaluation
 suite that shows whether it behaves.
