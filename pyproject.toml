@@ -1,7 +1,7 @@
 [project]
-name = "complaints-agent"
+name = "eval-driven-agent"
 version = "0.1.0"
-description = "A Claude agent for bank complaints, with MCP tools, skills and an eval suite"
+description = "Eval-driven agents for regulated workflows: a reference implementation with a UK bank complaints case study"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"

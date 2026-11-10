@@ -1,19 +1,52 @@
-# Lumen Bank complaints agent
+# Eval-driven agents for regulated workflows
 
-A Claude agent that handles written complaints for a fictional UK bank, with the evaluation
-suite that shows whether it behaves.
+A reference implementation for putting an LLM agent in front of real customers in a regulated
+domain, with UK bank complaints as the case study.
 
-The agent checks the customer's identity, looks up their account, follows the bank's policy,
-refunds small amounts within a limit and escalates everything else to a person. The bank's
-systems sit behind an MCP server that enforces every rule in code. A separate, cheap model
-screens third-party text for prompt injections. The eval harness runs each complaint several
-times on a fresh bank, grades what actually changed in the database and reports pass^k, cost
-and latency per task.
+An agent is only ready for a regulated workflow when you can show how it behaves. This project
+gets there by moving trust in two directions:
+
+- **Out of the prompt and into code.** Identity checks, lockouts, spending limits and
+  permissions are enforced inside the tools, so no prompt, customer or injected text can talk
+  the agent past them.
+- **Out of the agent's claims and into measured outcomes.** Evals grade what actually changed
+  in the system of record, run every task several times, and gate CI on pass^k: the chance it
+  gets it right *every* time, not once in a few tries.
+
+Around those two ideas sit layered prompt-injection defences, each with its own eval, a
+minimal harness with hard budgets and hand-offs to a person, and cost, latency and cache hit
+rate per task, so a model upgrade is a measured decision rather than a guess.
+
+### The case study: Lumen Bank
+
+The agent handles written complaints for a fictional UK bank. It checks the customer's
+identity, looks up their account, follows the bank's policy, refunds small amounts within a
+limit and escalates everything else to a person. The bank's systems sit behind an MCP server
+that enforces every rule in code. A separate, cheap model screens third-party text for prompt
+injections. The eval harness runs each complaint several times on a fresh bank, grades what
+changed in the database and reports pass^k, cost and latency per task.
 
 **Why bank complaints?** It's a small task that contains most of the hard parts of an
 enterprise agent. You have to check identity before touching data, follow a written policy,
 move money within a limit, read text written by strangers and look after vulnerable customers.
 And a regulator will ask how you know it behaves.
+
+### What carries over to other domains
+
+The bank is the example; the approach is the point. Insurance claims, healthcare admin,
+utilities billing and public-sector casework have the same shape: verify who you're talking
+to, act within an authority limit, read untrusted documents, escalate what you can't decide,
+and prove it all to an auditor. Moving to another domain means swapping three things:
+
+| Swap | Bank version | What stays the same |
+| --- | --- | --- |
+| The system of record and its rules | `bank_server.py` (MCP) | Rules in tools, audit log, untrusted-text labelling, refusals the model can act on |
+| The procedures | `skills/` | Progressive disclosure: names in the prompt, bodies on demand |
+| What "good" means | `evals/tasks.yaml`, `evals/screen_cases.yaml` | Outcome graders, LLM judge, pass^k gating, the screen's component eval |
+
+The agent loop, budgets, hand-offs, injection screen, caching, cost tracking and eval runners
+don't change. Today they still live alongside the bank code; separating them is first on the
+[Roadmap](#roadmap).
 
 ## Quickstart
 
@@ -453,6 +486,19 @@ What would need to change before this handled a real customer:
 - **The other eval layers**: weekly transcript sampling, customer feedback, and a calibrated
   judge before it gates anything.
 - **Rate limits and retries** sized for real traffic, with the Batch API for offline grading.
+
+## Roadmap
+
+- [ ] **Split the generic harness from the bank domain.** Move the loop, screen, eval runners
+  and server building blocks (audit log, refusals, untrusted labelling) into a `harness/`
+  package, and the bank into `domains/bank/`, behind a small domain interface. Add a contract
+  test that every domain must pass (reference solutions, balanced screen cases, an audit log).
+- [ ] **A second domain** (for example insurance claims or healthcare admin) to prove the
+  split, with its own screen thresholds.
+- [ ] **Run the live evals and publish results**: pass^k, cost per task and latency for the
+  regression suite and the screen, then a model comparison.
+- [ ] **Calibrate the judge** against 30 to 50 hand-labelled transcripts.
+- [ ] **Grow the bank suite** towards 20 to 50 tasks, drawn from failed transcripts.
 
 ## Limitations
 
