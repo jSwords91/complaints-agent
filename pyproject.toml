@@ -1,6 +1,9 @@
 [project]
 name = "complaints-agent"
 version = "0.1.0"
+description = "A Claude agent for bank complaints, with MCP tools, skills and an eval suite"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=2.6.0",

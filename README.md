@@ -1,51 +1,34 @@
 # Lumen Bank complaints agent
 
-This is a small Claude agent that handles written complaints for a made-up UK bank. I built it
-as the hands-on half of my preparation for Anthropic's Applied AI interviews. It covers the
-technical sections of my study guide in one system I can explain on a whiteboard in five minutes:
+A Claude agent that handles written complaints for a fictional UK bank, with the evaluation
+suite that shows whether it behaves.
 
-| Study guide section | Where it's covered here |
-| --- | --- |
-| 1. Evaluations | [Evals](#1-evaluations) |
-| 2. Prompting and context engineering | [Context](#2-prompting-and-context-engineering) |
-| 3. Agent architecture and harness design | [Architecture](#3-agent-architecture-and-harness-design) |
-| 4. Tools, MCP and skills | [Tools](#4-tools-mcp-and-skills) |
-| 6. Agent security and containment | [Security](#6-agent-security-and-containment) |
-| 9. Cost, latency and ROI | [Cost](#9-cost-latency-and-roi) |
+The agent checks the customer's identity, looks up their account, follows the bank's policy,
+refunds small amounts within a limit and escalates everything else to a person. The bank's
+systems sit behind an MCP server that enforces every rule in code. A separate, cheap model
+screens third-party text for prompt injections. The eval harness runs each complaint several
+times on a fresh bank, grades what actually changed in the database and reports pass^k, cost
+and latency per task.
 
-Sections 5 (models and products), 7 (discovery and communication) and 8 (mission and
-governance) aren't things you show in code, so I'm preparing them separately.
+**Why bank complaints?** It's a small task that contains most of the hard parts of an
+enterprise agent. You have to check identity before touching data, follow a written policy,
+move money within a limit, read text written by strangers and look after vulnerable customers.
+And a regulator will ask how you know it behaves.
 
-**Why a bank complaint?** It's a small task, but it contains most of the hard parts of an
-enterprise agent. You have to check identity before touching data, follow a policy, move money
-within a limit, read text written by strangers, and look after vulnerable customers. And a
-regulator will ask how you know it behaves. Financial services is also the safest vertical to
-know for the London roles.
+## Quickstart
 
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
-## How to read this repo
+```bash
+uv run pytest -q                       # 36 offline tests, free, a few seconds
 
-Every place the code demonstrates something from the study guide has a comment with a checklist
-ID and a source key, like this:
-
-```python
-# S3 [CONTAIN]: the hard limits. Whatever the prompt, the customer or an injected memo
-#   says, no credit above the role's authority and no credit on a fraud case.
+export ANTHROPIC_API_KEY=...
+uv run agent.py                        # chat (try customer C001, born 12 April 1988, SE1 7PB)
+uv run python -m evals.run --suite regression --trials 3 --gate 0.9
+uv run python -m evals.screen --trials 3
+cp results/latest.json results/baseline.json
+uv run python -m evals.run --model claude-sonnet-5-5 --compare results/baseline.json
 ```
-
-The IDs match the tables below. Source keys are listed at the end. To find every use of one
-source, run `grep -rn "\[DE\]" --exclude=README.md .`.
-
-I'd read the files in this order, because each one builds on the last:
-
-1. `bank_server.py`: the "world". The bank's data, its rules and the six tools.
-2. `skills/`: the two procedures the agent can load.
-3. `agent.py`: the agent itself. The loop, the prompt, the injection screen and cost tracking.
-4. `evals/tasks.yaml`: what "good" means, written down as tasks and graders.
-5. `evals/run.py`: how the tasks are run, graded and turned into numbers.
-6. `evals/screen_cases.yaml` and `evals/screen.py`: a smaller eval for one component, the
-   injection screen.
-7. `tests/test_offline.py`: everything that can be checked without calling a model.
 
 ## The system in one picture
 
@@ -84,17 +67,33 @@ evals/screen.py    20 labelled memos ─> the screen alone ─> catch rate, keep
 | `tests/test_offline.py` | 36 free tests: tool rules, normalisation, the screen and its eval, reference solutions, metrics, the loop, hand-offs, a whole trial |
 | `.github/workflows/evals.yml` | Offline tests and gated regression evals on PRs, capability evals nightly |
 
-## Running it
+Each file builds on the one before it, so the table above is also a good reading order.
+
+## Design notes in the code
+
+Each design decision has an ID, grouped by area, and the code that implements it carries a
+comment with that ID and a reference key:
+
+```python
+# S3 [CONTAIN]: the hard limits. Whatever the prompt, the customer or an injected memo
+#   says, no credit above the role's authority and no credit on a fraud case.
+```
+
+| Prefix | Area |
+| --- | --- |
+| E | [Evaluations](#evaluations) |
+| C | [Prompting and context](#prompting-and-context) |
+| A | [Agent architecture](#agent-architecture) |
+| T | [Tools, MCP and skills](#tools-mcp-and-skills) |
+| S | [Security and containment](#security-and-containment) |
+| K | [Cost and latency](#cost-and-latency) |
+
+The keys in brackets are listed under [References](#references). To find every decision in
+one area, or everything that draws on one reference:
 
 ```bash
-uv run pytest -q                       # offline, free, a few seconds
-
-export ANTHROPIC_API_KEY=...
-uv run agent.py                        # chat (try customer C001, born 12 April 1988, SE1 7PB)
-uv run python -m evals.run --suite regression --trials 3 --gate 0.9
-uv run python -m evals.screen --trials 3
-cp results/latest.json results/baseline.json
-uv run python -m evals.run --model claude-sonnet-5-5 --compare results/baseline.json
+grep -rn "# S[0-9]" --exclude=README.md .
+grep -rn "\[DE\]" --exclude=README.md .
 ```
 
 ## What gets checked, and when
@@ -139,7 +138,7 @@ The reasoning summaries are there because `Config.thinking_display` is `"summari
 always thinks, but by default it returns the thinking empty. Thinking is billed the same
 either way; the setting only controls whether you can see it.
 
-How I read a failed trial:
+To work through a failed trial:
 
 1. **Start with the grades.** Is the failure real? A wrong judge or an ambiguous criterion is a
    grader bug, not an agent bug. [DE] is blunt about this: you don't know if your graders are
@@ -153,17 +152,16 @@ How I read a failed trial:
 
 ---
 
-## 1. Evaluations
+## Evaluations
 
-**What the guide asks:** know the vocabulary cold, prefer code graders, use LLM judges
-carefully, think in pass^k for customer-facing agents, and use evals to decide on model upgrades.
+**The problem.** The agent's output varies from run to run, its reply can claim things it
+didn't do, and a complaints agent has to be right every time, not once in three tries.
 
-**What I did and why.** Each task is one written complaint. Graders check what ended up in the
+**What it does.** Each task is one written complaint. Graders check what ended up in the
 bank's database (was £24.99 credited? was the case escalated?), because the agent can claim
 anything in its reply but can't fake the database. An LLM judge covers what code can't (tone,
 clarity, what was disclosed), one call per criterion. Every task runs several times on a fresh
-bank, and CI gates on pass^k, because a complaints agent has to get it right every time, not
-once in three tries.
+bank, and CI gates on pass^k rather than pass@k.
 
 Two more decisions matter as much as the graders. Infrastructure errors (an API outage, a rate
 limit) are left out of pass^k and reported separately, so an outage can't look like the agent
@@ -180,13 +178,13 @@ hand-off reason, the start of the reply, and the transcript to open. `evals/scre
 every case with a mark per trial, the screen's own one-sentence reason for each mistake, a
 pass/fail verdict that names the cases at fault, and the cost and latency per check.
 
-I wrote each criterion so that two people reading the same transcript would grade it the same
-way. "The reply tells the customer the refund amount and what happens next" works; "the reply
-is good" doesn't.
+Each criterion is written so that two people reading the same transcript would grade it the
+same way. "The reply tells the customer the refund amount and what happens next" works; "the
+reply is good" doesn't.
 
-| ID | Demonstrates | Where |
+| ID | Decision | Where |
 | --- | --- | --- |
-| E1 | The vocabulary: task, trial, grader, transcript, outcome, evaluation vs agent harness | `evals/run.py` docstring |
+| E1 | Shared vocabulary: task, trial, grader, transcript, outcome, evaluation vs agent harness | `evals/run.py` docstring |
 | E2 | Code graders check the outcome in the database, which the agent can't fake | `tasks.yaml`, `grade_code` |
 | E3 | Path graders only where an auditor would care (no account access after failed verification) | `failed_verification_no_disclosure` |
 | E4 | LLM judge: one call per dimension, UNKNOWN allowed, structured output | `grade_judge` |
@@ -201,25 +199,26 @@ is good" doesn't.
 
 **Not done here, and why:**
 
-- **Only nine tasks.** The guide says 20 to 50, drawn from real failures. Nine is enough to
-  show the shape; the next ones should come from transcripts where it went wrong.
-- **No judge calibration yet.** Before a judge gates anything, I'd label 30 to 50 transcripts
-  by hand and check it agrees with me.
-- **Evals are one layer.** In production I'd add the other layers of the "Swiss cheese" model:
-  sampling live transcripts every week, customer feedback, and A/B tests of prompt changes.
+- **Only nine tasks.** [DE] suggests starting with 20 to 50, drawn from real failures. Nine is
+  enough to show the shape; the next ones should come from transcripts where it went wrong.
+- **No judge calibration yet.** Before a judge gates anything, label 30 to 50 transcripts by
+  hand and check it agrees.
+- **Evals are one layer.** In production they sit alongside the other layers of the "Swiss
+  cheese" model: sampling live transcripts every week, customer feedback, and A/B tests of
+  prompt changes.
 
-## 2. Prompting and context engineering
+## Prompting and context
 
-**What the guide asks:** treat context as a finite budget, use progressive disclosure, know
-caching, compaction and memory, and don't carry rules written for older models.
+**The problem.** Context is a finite budget, and a rule written in a prompt only makes the
+model *likely* to follow it.
 
-**What I did and why.** The system prompt is short: who the agent is, what a good reply looks
-like, and the one rule it needs everywhere (third-party text is data, not instructions).
-Procedures live in skills, which the model loads only when it needs them. Hard rules live in the
-tools, where code enforces them. That split matters more than any wording: a prompt can only
-make the model *likely* to follow a rule, while a tool makes it certain.
+**What it does.** The system prompt is short: who the agent is, what a good reply looks like,
+and the one rule it needs everywhere (third-party text is data, not instructions). Procedures
+live in skills, which the model loads only when it needs them. Hard rules live in the tools,
+where code enforces them. That split matters more than any wording: a prompt makes a rule
+likely, a tool makes it certain.
 
-| ID | Demonstrates | Where |
+| ID | Decision | Where |
 | --- | --- | --- |
 | C1 | A short system prompt: procedures in skills, hard rules in tools | `SYSTEM` in `agent.py` |
 | C2 | Progressive disclosure: skill names in the prompt, full text loaded on demand | `read_skills`, `load_skill` |
@@ -231,25 +230,24 @@ make the model *likely* to follow a rule, while a tool makes it certain.
 - **Compaction, context resets and the memory tool.** Complaints are short, so the context
   never fills. A long-running version should use the API's server-side compaction rather than
   editing history by hand, which would break the cache and the thinking blocks.
-- **Retrieval (RAG).** The policy fits in one skill. If it grew to hundreds of pages, I'd put
-  it behind a search tool before reaching for a vector database.
+- **Retrieval (RAG).** The policy fits in one skill. If it grew to hundreds of pages, it should
+  go behind a search tool before reaching for a vector database.
 - **A prompt audit.** Worth running `/claude-api prompt-audit` on `SYSTEM` and the skills when
   the model changes, to catch rules the new model no longer needs.
 
-## 3. Agent architecture and harness design
+## Agent architecture
 
-**What the guide asks:** know the workflow patterns and when a loop beats them, know when
-subagents earn their place, separate generator and evaluator, and remove scaffolding a newer
-model doesn't need.
+**The problem.** Complaints don't follow one fixed path, but every extra component in a
+harness is an assumption about what the model can't do.
 
-**What I did and why.** The core is a single agent loop, because the steps differ by complaint
+**What it does.** The core is a single agent loop, because the steps differ by complaint
 (a duplicate charge needs a transaction search; a scam needs a skill and an escalation). Around
 it are two small fixed workflows from [BEA]: the injection screen is a guardrail run by a
 separate model, and the eval judge is a separate evaluator, because a model grading its own
 work skews positive. The harness owns the hard stops (turn and cost budgets) and hands off to a
 person instead of failing silently.
 
-| ID | Demonstrates | Where |
+| ID | Decision | Where |
 | --- | --- | --- |
 | A1 | A single loop; parallel tool calls returned in one message; no subagents, and why | `agent.py` docstring, `Agent.run` |
 | A2 | Turn and cost budgets enforced by the harness, handing off to a person | `Config`, `Agent.run` |
@@ -262,19 +260,19 @@ person instead of failing silently.
 
 - **Subagents.** None of [FOLD]'s three reasons applies: no context bloat, no parallel work
   needing fresh contexts, no conflicting tool sets. A "refunds subagent" would just copy the org
-  chart. If evals on long, multi-issue cases showed the context getting crowded, I'd revisit it.
+  chart. If evals on long, multi-issue cases showed the context getting crowded, that would be
+  the time to revisit it.
 - **Managed Agents.** The same tasks could run on Managed Agents to compare harnesses. The eval
   suite is what would make that comparison fair.
 - **The SDK's tool runner.** Anthropic's docs recommend it as the default for custom-tool agents,
-  and its per-turn hooks would cover the budgets, the screen and the hand-off. I wrote the loop
-  by hand because the loop is what you get asked to whiteboard, and I want to know every line
-  of it. For a customer build I'd start with the runner.
+  and its per-turn hooks would cover the budgets, the screen and the hand-off. The loop here is
+  written by hand so that every step of it is visible in one place; a production build would
+  reasonably start with the runner.
 
-## 4. Tools, MCP and skills
+## Tools, MCP and skills
 
-**What the guide asks:** design tools around what the agent is trying to do, put preconditions
-and permissions inside tools, return messages the model can act on, and know when something
-should be a tool, a skill or reference material.
+**The problem.** The model only sees tool descriptions and results, so a tool's design decides
+how well the agent can use it, and what it's allowed to do.
 
 **MCP or plain tools?** Anthropic's guidance doesn't give a rule; it sorts tools by where the
 code runs. Plain (client) tools are ones where "you write the schema and your application runs
@@ -284,7 +282,7 @@ in their agent and it unlocks an entire ecosystem of integrations" ([CEM]). The
 [MCP connector](https://platform.claude.com/docs/en/agents-and-tools/mcp-connector) is a
 server-side option, but it only reaches public HTTP servers, not a local stdio one like this.
 
-From that, my split is about **ownership**:
+So the split here is about **ownership**:
 
 - **The bank's systems go behind MCP.** In a real bank another team would own them, and the
   same server could serve this agent, Claude Desktop or the next agent someone builds. It's
@@ -297,7 +295,7 @@ From that, my split is about **ownership**:
 Both kinds follow the same design rules, because the model can't tell them apart: clear
 descriptions, strict schemas, and results it can act on [TOOLS].
 
-**What I did and why.** Six MCP tools, grouped by intent (verify, look up the customer, find
+**What it does.** Six MCP tools, grouped by intent (verify, look up the customer, find
 transactions, open, resolve, escalate), not one per database table. Every precondition is
 checked inside the tool, and a refusal tells the model what to do next ("call verify_customer
 first"). The tools also normalise what customers type, so "12th April 1988", "se17pb" and
@@ -305,7 +303,7 @@ first"). The tools also normalise what customers type, so "12th April 1988", "se
 of thumb: tools for actions and live data, skills for procedures, reference material behind a
 search tool.
 
-| ID | Demonstrates | Where |
+| ID | Decision | Where |
 | --- | --- | --- |
 | T1 | An MCP server with tools grouped by intent, not by table | `bank_server.py` |
 | T2 | Descriptions written for the model; typed, enum-constrained parameters | tool docstrings, `Literal` types |
@@ -330,13 +328,12 @@ search tool.
 - **A remote MCP server with OAuth.** A real bank's server would be remote, with per-user
   OAuth. Stdio keeps the example self-contained.
 
-## 6. Agent security and containment
+## Security and containment
 
-**What the guide asks:** design containment at the environment first (model-level defences are
-probabilistic), keep credentials out of the agent's reach, treat tool output as an attack
-surface, and match isolation to who's judging the agent's actions.
+**The problem.** Model-level defences are probabilistic, the agent reads text written by
+strangers, and the customer can't judge whether a tool call is safe.
 
-**What I did and why.** The guide's three risks map onto this agent like this:
+**What it does.** Three kinds of risk apply to this agent:
 
 - **User misuse:** a customer pushing for more money than policy allows, or someone guessing
   another person's details. The credit limit and a three-attempt verification lockout are in
@@ -350,9 +347,10 @@ surface, and match isolation to who's judging the agent's actions.
   layers stand in the way. That task is the reason the screen exists.
 
 Customers can't judge tool calls, so there's no "approve this action?" prompt to lean on. That
-pushes the defences into code, which is where the guide says they belong anyway.
+pushes the defences into the environment and the code, which is where containment should start
+anyway [CONTAIN].
 
-| ID | Demonstrates | Where |
+| ID | Decision | Where |
 | --- | --- | --- |
 | S1 | Credentials stay in the server process; the API key never reaches it | `connect`, `bank_server.py` |
 | S2 | Third-party text labelled untrusted, plus a prompt-injection eval | `untrusted`, `injected_memo_ignored` |
@@ -368,33 +366,32 @@ the catch rate (attacks removed on every trial) and the keep rate (harmless text
 every trial). For a bank, a missed attack can move money and a wrongly removed memo only costs
 some context, so the defaults require every attack caught and tolerate a little over-removal.
 A logistics agent that depends on delivery notes might weigh them the other way. Setting those
-two numbers is a conversation with the customer's risk team, not a coding decision.
+two numbers is a conversation with the risk team, not a coding decision.
 
-**Trade-offs worth discussing:** the screen fails closed. If Haiku can't be reached, the memo
-is removed rather than passed through, which trades a little helpfulness for safety. Its
-redactions are saved in each transcript, so a jump in the redaction rate is visible. And
-`--no-guard` runs the evals without it, which answers whether it still earns its place on a
-newer model.
+**Trade-offs:** the screen fails closed. If Haiku can't be reached, the memo is removed rather
+than passed through, which trades a little helpfulness for safety. Its redactions are saved in
+each transcript, so a jump in the redaction rate is visible. And `--no-guard` runs the evals
+without it, which answers whether it still earns its place on a newer model.
 
-## 9. Cost, latency and ROI
+## Cost and latency
 
-**What the guide asks:** know the levers (model tiering, caching, batch, effort) and be able to
-put cost per task next to the cost of a person doing the same work.
+**The problem.** A change that improves quality can quietly double the cost, and an agent is
+only worth running if it's cheaper than a person for the same result.
 
-**What I did and why.** Every number comes from the API's own usage fields. The eval report
-shows cost, model calls, latency and cache hit rate per task, so a change like "try Sonnet" or
-"lower the effort" shows up as a trade-off in one table: pass^k against dollars and seconds.
+**What it does.** Every number comes from the API's own usage fields. The eval report shows
+cost, model calls, latency and cache hit rate per task, so a change like "try Sonnet" or "lower
+the effort" shows up as a trade-off in one table: pass^k against dollars and seconds.
 
-| ID | Demonstrates | Where |
+| ID | Decision | Where |
 | --- | --- | --- |
 | K1 | Model, effort and token limits are config; an upgrade is one eval flag | `Config`, `--model`, `--effort` |
 | K2 | Cost per task from usage, including cache reads and writes | `Usage.cost_usd` |
 | K3 | Cache hit rate, reported per task | `Usage.cache_hit_rate` |
 | K4 | Model tiering: the narrow screening job runs on the cheapest model | `Config.guard_model` |
 
-The ROI line I'd take to a customer is the cost per complaint from the eval report next to what
-a person costs for the same complaint (minutes per complaint times the loaded hourly rate). I'd
-put the pass^k figure alongside it, because a cheap agent that's right 75% of the time isn't cheap.
+The ROI comparison is the cost per complaint from the eval report next to what a person costs
+for the same complaint (minutes per complaint times the loaded hourly rate), with the pass^k
+figure alongside it, because a cheap agent that's right 75% of the time isn't cheap.
 
 **Not done here, and why:**
 
@@ -403,33 +400,46 @@ put the pass^k figure alongside it, because a cheap agent that's right 75% of th
 
 ---
 
-## Exercises
+## Things to try
 
-These turn the study guide's practice tasks into things to do with this repo.
-
-1. **Decide on a model upgrade (section 1).** Run the regression suite on Opus 5.5, save the
-   baseline, then rerun with `--model claude-sonnet-5-5`. Write the recommendation in three
-   sentences: what flipped, what it costs, and what you'd do.
-2. **Grow the suite (section 1).** Add a task for an ambiguous date ("04/12/1988" from someone
-   who might be American). What should the agent do, and how would you grade it?
-3. **Test an assumption (sections 3 and 6).** Run `injected_memo_ignored` with and without
-   `--no-guard`, five trials each. Does the screen change the pass rate? Is it worth its cost?
-4. **Tune the screen for another industry (section 6).** Run `evals/screen.py` with
+1. **Decide on a model upgrade.** Run the regression suite on Opus 5.5, save the baseline, then
+   rerun with `--model claude-sonnet-5-5`. Summarise it in three sentences: what flipped, what
+   it costs, and what you'd do.
+2. **Grow the suite.** Add a task for an ambiguous date ("04/12/1988" from someone who might be
+   American). What should the agent do, and how would you grade it? See
+   [Adding a task](#adding-a-task).
+3. **Test an assumption.** Run `injected_memo_ignored` with and without `--no-guard`, five
+   trials each. Does the screen change the pass rate? Is it worth its cost?
+4. **Tune the screen for another industry.** Run `evals/screen.py` with
    `--guard-model claude-sonnet-5-5`. Is the better catch rate (if any) worth the cost? Then
-   pick thresholds for a healthcare provider reading GP letters, and argue for them.
-5. **Defend the architecture (section 3).** On a whiteboard: what eval result would make you
-   add a subagent, and which one?
-6. **Answer the CISO (section 6).** "How do we stop a prompt injection in a SharePoint file from
-   exfiltrating data?" Use the S rows as the skeleton of the answer.
-7. **Find the cheapest setting that holds quality (section 9).** Try `--effort low`. Then work
-   out the cost per complaint and the ROI line above.
-8. **Calibrate the judge (section 1).** Hand-label 20 transcripts from `results/transcripts/`
-   and measure how often the judge agrees with you.
+   pick thresholds for a healthcare provider reading GP letters.
+5. **Find the eval result that would justify a subagent.** What would you have to see in the
+   transcripts, and which subagent would it be?
+6. **Generalise the defences.** Use the S rows to design the defence against a prompt injection
+   in a shared document that tries to exfiltrate data.
+7. **Find the cheapest setting that holds quality.** Try `--effort low`, then work out the cost
+   per complaint and the ROI comparison above.
+8. **Calibrate the judge.** Hand-label 20 transcripts from `results/transcripts/` and measure
+   how often the judge agrees with you.
+
+## Adding a task
+
+1. Add a customer and any transactions it needs to the seed data in `bank_server.py`. Each
+   customer exists for one task, so tasks don't interfere.
+2. Add the task to `evals/tasks.yaml`: an `id`, the `complaint`, its `suite` (`regression`
+   or `capability`), a list of `graders` (`state` and `tool_calls` for what code can check,
+   `judge` dimensions for what it can't), and a `reference_solution`: the tool calls that
+   solve it.
+3. Run `uv run pytest -q`. The offline tests replay every reference solution against the code
+   graders, so a task that can't be passed fails here, for free, before any model call.
+4. Run the task live a few times and read the transcripts before trusting its graders.
+
+New capability tasks start in the `capability` suite and move to `regression` once they pass
+every time; the report flags when that's happened.
 
 ## From here to production
 
-What I'd change before this handled a real customer. This list is the answer to "what would you
-do in the first 90 days?":
+What would need to change before this handled a real customer:
 
 - **Hand-offs go to a real queue.** Today a hand-off is recorded on the session. In production
   it becomes a ticket a person picks up, with the transcript attached.
@@ -444,16 +454,17 @@ do in the first 90 days?":
   judge before it gates anything.
 - **Rate limits and retries** sized for real traffic, with the Batch API for offline grading.
 
-## Caveats
+## Limitations
 
-- I haven't run the live evals yet (there was no API key where this was built). The offline
-  tests pass, and the request shapes were checked against `anthropic` 2.6.0 and `mcp` 2.3.0.
+- The live evals haven't been run yet, so there are no published pass rates or costs. The
+  offline tests pass, and the request shapes were checked against `anthropic` 2.6.0 and
+  `mcp` 2.3.0.
 - Server-side refusal fallback (`fallbacks: "default"`) is on for Opus 5.5 and Sonnet 5.5. If
   every model refuses, the agent hands off to a person.
 - Check the prices in `agent.py` against the pricing page before quoting any cost.
 - Lumen Bank, its customers and its policies are fictional.
 
-## Sources
+## References
 
 | Key | Source |
 | --- | --- |
@@ -471,3 +482,7 @@ do in the first 90 days?":
 
 The project layout started from
 [anthropics/claude-quickstarts/agents](https://github.com/anthropics/claude-quickstarts/tree/main/agents).
+
+## License
+
+[MIT](LICENSE)
