@@ -1,51 +1,33 @@
-# Eval-driven agents for regulated workflows
+# Eval-driven agent
 
-A reference implementation for putting an LLM agent in front of real customers in a regulated
-domain, with UK bank complaints as the case study.
+A Claude agent built and tested against an eval suite. The example task is handling written
+complaints for a fictional UK bank.
 
-An agent is only ready for a regulated workflow when you can show how it behaves. This project
-gets there by moving trust in two directions:
+The agent checks the customer's identity, looks up their account, follows the bank's policy,
+refunds small amounts within a limit and escalates everything else to a person. The bank's
+systems sit behind an MCP server that enforces the rules in code. A separate, cheap model
+screens third-party text for prompt injections.
 
-- **Out of the prompt and into code.** Identity checks, lockouts, spending limits and
-  permissions are enforced inside the tools, so no prompt, customer or injected text can talk
-  the agent past them.
-- **Out of the agent's claims and into measured outcomes.** Evals grade what actually changed
-  in the system of record, run every task several times, and gate CI on pass^k: the chance it
-  gets it right *every* time, not once in a few tries.
+The eval harness runs each task several times on a fresh copy of the bank, grades what changed
+in the database (not what the agent says it did), and reports pass@k, pass^k, cost and latency
+per task. CI runs the offline tests and gates on the regression suite.
 
-Around those two ideas sit layered prompt-injection defences, each with its own eval, a
-minimal harness with hard budgets and hand-offs to a person, and cost, latency and cache hit
-rate per task, so a model upgrade is a measured decision rather than a guess.
+**Why bank complaints?** The task is small but covers a lot: checking identity before touching
+data, following a written policy, moving money within a limit, reading text written by third
+parties, and taking care with vulnerable customers.
 
-### The case study: Lumen Bank
+### Using it for a different task
 
-The agent handles written complaints for a fictional UK bank. It checks the customer's
-identity, looks up their account, follows the bank's policy, refunds small amounts within a
-limit and escalates everything else to a person. The bank's systems sit behind an MCP server
-that enforces every rule in code. A separate, cheap model screens third-party text for prompt
-injections. The eval harness runs each complaint several times on a fresh bank, grades what
-changed in the database and reports pass^k, cost and latency per task.
+Most of the code doesn't depend on the bank. To point it at another task, you'd replace:
 
-**Why bank complaints?** It's a small task that contains most of the hard parts of an
-enterprise agent. You have to check identity before touching data, follow a written policy,
-move money within a limit, read text written by strangers and look after vulnerable customers.
-And a regulator will ask how you know it behaves.
-
-### What carries over to other domains
-
-The bank is the example; the approach is the point. Insurance claims, healthcare admin,
-utilities billing and public-sector casework have the same shape: verify who you're talking
-to, act within an authority limit, read untrusted documents, escalate what you can't decide,
-and prove it all to an auditor. Moving to another domain means swapping three things:
-
-| Swap | Bank version | What stays the same |
-| --- | --- | --- |
-| The system of record and its rules | `bank_server.py` (MCP) | Rules in tools, audit log, untrusted-text labelling, refusals the model can act on |
-| The procedures | `skills/` | Progressive disclosure: names in the prompt, bodies on demand |
-| What "good" means | `evals/tasks.yaml`, `evals/screen_cases.yaml` | Outcome graders, LLM judge, pass^k gating, the screen's component eval |
+| Part | Bank version |
+| --- | --- |
+| The tools and their rules | `bank_server.py` (MCP server) |
+| The procedures | `skills/` |
+| The eval tasks and screen cases | `evals/tasks.yaml`, `evals/screen_cases.yaml` |
 
 The agent loop, budgets, hand-offs, injection screen, caching, cost tracking and eval runners
-don't change. Today they still live alongside the bank code; separating them is first on the
+stay the same. They currently live alongside the bank code; separating them is on the
 [Roadmap](#roadmap).
 
 ## Quickstart
@@ -493,8 +475,7 @@ What would need to change before this handled a real customer:
   and server building blocks (audit log, refusals, untrusted labelling) into a `harness/`
   package, and the bank into `domains/bank/`, behind a small domain interface. Add a contract
   test that every domain must pass (reference solutions, balanced screen cases, an audit log).
-- [ ] **A second domain** (for example insurance claims or healthcare admin) to prove the
-  split, with its own screen thresholds.
+- [ ] **A second example task** to check the split, with its own screen thresholds.
 - [ ] **Run the live evals and publish results**: pass^k, cost per task and latency for the
   regression suite and the screen, then a model comparison.
 - [ ] **Calibrate the judge** against 30 to 50 hand-labelled transcripts.

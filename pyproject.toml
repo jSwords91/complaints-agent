@@ -1,7 +1,7 @@
 [project]
 name = "eval-driven-agent"
 version = "0.1.0"
-description = "Eval-driven agents for regulated workflows: a reference implementation with a UK bank complaints case study"
+description = "An eval-driven Claude agent, with bank complaints as the example task"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
